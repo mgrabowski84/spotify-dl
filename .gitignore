@@ -1,0 +1,9 @@
+node_modules/
+app/node_modules/
+app/.env
+app/data/
+app/bin/sldl
+app/bin/sldl.pdb
+*.db
+*.db-wal
+*.db-shm

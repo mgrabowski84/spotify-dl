@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>spotify-dl</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>spotify-dl</h1>
+      <p class="subtitle">Spotify &rarr; Soulseek &rarr; FLAC</p>
+    </header>
+
+    <section class="input-section">
+      <form id="download-form">
+        <div class="input-row">
+          <input
+            type="text"
+            id="url-input"
+            placeholder="Paste Spotify playlist or album URL..."
+            autocomplete="off"
+            spellcheck="false"
+            required
+          >
+          <button type="submit" id="submit-btn">Download</button>
+        </div>
+        <div class="input-row secondary">
+          <input
+            type="text"
+            id="name-input"
+            placeholder="Custom folder name (optional)"
+            autocomplete="off"
+            spellcheck="false"
+          >
+        </div>
+      </form>
+      <div id="form-error" class="error hidden"></div>
+    </section>
+
+    <section class="jobs-section">
+      <div class="section-header">
+        <h2>Downloads</h2>
+        <button id="refresh-btn" class="btn-icon" title="Refresh">&#x21bb;</button>
+      </div>
+      <div id="jobs-list"></div>
+      <div id="empty-state" class="empty hidden">No downloads yet. Paste a Spotify URL above to get started.</div>
+    </section>
+
+    <section id="log-section" class="log-section hidden">
+      <div class="section-header">
+        <h2>Logs <span id="log-job-title"></span></h2>
+        <button id="close-logs" class="btn-icon" title="Close">&times;</button>
+      </div>
+      <pre id="log-output"></pre>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

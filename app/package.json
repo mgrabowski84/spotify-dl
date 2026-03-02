@@ -1,0 +1,13 @@
+{
+  "name": "spotify-dl",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Spotify playlist downloader via Soulseek with web UI",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "express": "^5.1.0"
+  }
+}

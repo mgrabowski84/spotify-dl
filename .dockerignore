@@ -1,0 +1,8 @@
+node_modules
+app/node_modules
+app/.env
+app/data
+app/bin
+.git
+.gitignore
+README.md
