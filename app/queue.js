@@ -81,13 +81,13 @@ function buildSldlArgs(url, outputDir) {
     '--listen-port', LISTEN_PORT,
   ];
 
-  if (process.env.SPOTIFY_ID) {
-    args.push('--spotify-id', process.env.SPOTIFY_ID);
-  }
-  if (process.env.SPOTIFY_SECRET) {
-    args.push('--spotify-secret', process.env.SPOTIFY_SECRET);
-  }
+  // Only pass Spotify credentials when a refresh token is available.
+  // Passing --spotify-id/secret without --spotify-refresh triggers an
+  // interactive OAuth browser flow which doesn't work headlessly.
+  // Public playlists work without any credentials.
   if (process.env.SPOTIFY_REFRESH) {
+    args.push('--spotify-id', process.env.SPOTIFY_ID);
+    args.push('--spotify-secret', process.env.SPOTIFY_SECRET);
     args.push('--spotify-refresh', process.env.SPOTIFY_REFRESH);
   }
 
@@ -112,7 +112,7 @@ function runJob(job) {
   appendLog(jobId, `[spotify-dl] Output: ${outputDir}`);
 
   const args = buildSldlArgs(job.url, outputDir);
-  appendLog(jobId, `[spotify-dl] $ sldl ${args.map(a => a.includes(' ') ? `"${a}"` : a).join(' ')}`);
+  appendLog(jobId, `[spotify-dl] $ sldl ${args.map(a => (a && a.includes(' ')) ? `"${a}"` : (a ?? '<undefined>')).join(' ')}`);
 
   const proc = spawn(SLDL_BIN, args, {
     cwd: __dirname,

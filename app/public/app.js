@@ -11,10 +11,49 @@
   const logOutput = document.getElementById('log-output');
   const logJobTitle = document.getElementById('log-job-title');
   const closeLogs = document.getElementById('close-logs');
+  const spotifyBanner = document.getElementById('spotify-banner');
+  const bannerCard = document.getElementById('banner-card');
+  const bannerText = document.getElementById('banner-text');
+  const connectBtn = document.getElementById('connect-btn');
 
   let currentLogJobId = null;
   let eventSource = null;
   let pollInterval = null;
+
+  // --- Spotify Status ---
+  async function checkSpotifyStatus() {
+    try {
+      const { connected } = await api('GET', '/spotify/status');
+      spotifyBanner.classList.remove('hidden');
+      if (connected) {
+        bannerCard.classList.add('connected');
+        bannerText.textContent = 'Spotify connected — private playlists supported';
+        connectBtn.classList.add('hidden');
+      } else {
+        bannerCard.classList.remove('connected');
+        bannerText.textContent = 'Not connected to Spotify — only public playlists work';
+        connectBtn.classList.remove('hidden');
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  connectBtn.addEventListener('click', async () => {
+    try {
+      const { url, redirect_uri } = await api('GET', '/spotify/auth');
+      alert(`Before continuing, make sure this redirect URI is registered in your Spotify app:\n\n${redirect_uri}`);
+      const win = window.open(url, '_blank', 'width=500,height=700');
+      // Poll for connection
+      const check = setInterval(async () => {
+        try {
+          const { connected } = await api('GET', '/spotify/status');
+          if (connected) { clearInterval(check); checkSpotifyStatus(); }
+        } catch (e) { /* ignore */ }
+      }, 2000);
+      setTimeout(() => clearInterval(check), 300000);
+    } catch (e) {
+      alert('Failed to start auth: ' + e.message);
+    }
+  });
 
   // --- API ---
   async function api(method, path, body) {
@@ -247,6 +286,7 @@
   }
 
   // --- Init ---
+  checkSpotifyStatus();
   loadJobs();
   startPolling();
 })();

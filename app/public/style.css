@@ -324,29 +324,26 @@ header h1 {
   color: var(--warning);
 }
 
-/* Spotify Connect Banner */
-.spotify-connect {
+/* Spotify Banner */
+.spotify-banner {
   margin-bottom: 24px;
 }
 
-.connect-card {
+.banner-card {
   background: rgba(248, 81, 73, 0.1);
   border: 1px solid var(--danger);
   border-radius: var(--radius);
-  padding: 14px 16px;
+  padding: 12px 16px;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  font-size: 13px;
+  gap: 12px;
 }
 
-.connect-card.connected {
-  background: rgba(29, 185, 84, 0.1);
+.banner-card.connected {
+  background: rgba(29, 185, 84, 0.08);
   border-color: var(--accent);
-}
-
-.connect-text {
-  font-size: 14px;
-  font-weight: 600;
 }
 
 .connect-btn {
@@ -354,12 +351,14 @@ header h1 {
   color: #000;
   border: none;
   border-radius: var(--radius);
-  padding: 8px 16px;
+  padding: 7px 14px;
   font-family: var(--font);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
+  white-space: nowrap;
   transition: background 0.15s;
+  flex-shrink: 0;
 }
 
 .connect-btn:hover {
