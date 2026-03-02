@@ -11,49 +11,10 @@
   const logOutput = document.getElementById('log-output');
   const logJobTitle = document.getElementById('log-job-title');
   const closeLogs = document.getElementById('close-logs');
-  const spotifyBanner = document.getElementById('spotify-banner');
-  const bannerCard = document.getElementById('banner-card');
-  const bannerText = document.getElementById('banner-text');
-  const connectBtn = document.getElementById('connect-btn');
 
   let currentLogJobId = null;
   let eventSource = null;
   let pollInterval = null;
-
-  // --- Spotify Status ---
-  async function checkSpotifyStatus() {
-    try {
-      const { connected } = await api('GET', '/spotify/status');
-      spotifyBanner.classList.remove('hidden');
-      if (connected) {
-        bannerCard.classList.add('connected');
-        bannerText.textContent = 'Spotify connected — private playlists supported';
-        connectBtn.classList.add('hidden');
-      } else {
-        bannerCard.classList.remove('connected');
-        bannerText.textContent = 'Not connected to Spotify — only public playlists work';
-        connectBtn.classList.remove('hidden');
-      }
-    } catch (e) { /* ignore */ }
-  }
-
-  connectBtn.addEventListener('click', async () => {
-    try {
-      const { url, redirect_uri } = await api('GET', '/spotify/auth');
-      alert(`Before continuing, make sure this redirect URI is registered in your Spotify app:\n\n${redirect_uri}`);
-      const win = window.open(url, '_blank', 'width=500,height=700');
-      // Poll for connection
-      const check = setInterval(async () => {
-        try {
-          const { connected } = await api('GET', '/spotify/status');
-          if (connected) { clearInterval(check); checkSpotifyStatus(); }
-        } catch (e) { /* ignore */ }
-      }, 2000);
-      setTimeout(() => clearInterval(check), 300000);
-    } catch (e) {
-      alert('Failed to start auth: ' + e.message);
-    }
-  });
 
   // --- API ---
   async function api(method, path, body) {
@@ -90,7 +51,6 @@
     emptyState.classList.add('hidden');
     jobsList.innerHTML = jobs.map(job => renderJobCard(job)).join('');
 
-    // Attach event listeners
     jobsList.querySelectorAll('[data-action]').forEach(btn => {
       btn.addEventListener('click', handleJobAction);
     });
@@ -181,11 +141,6 @@
         // ignore
       }
     };
-    eventSource.onerror = () => {
-      // Connection lost, just stop
-    };
-
-    logOutput.scrollTop = logOutput.scrollHeight;
   }
 
   function appendLogLine(line) {
@@ -204,7 +159,6 @@
 
     logOutput.appendChild(span);
 
-    // Auto-scroll if near bottom
     const isNearBottom = logOutput.scrollHeight - logOutput.scrollTop - logOutput.clientHeight < 100;
     if (isNearBottom) {
       logOutput.scrollTop = logOutput.scrollHeight;
@@ -237,7 +191,6 @@
       urlInput.value = '';
       nameInput.value = '';
       loadJobs();
-      // Auto-open logs for the new job
       openLogs(job.id, job.playlist_name || extractName(url));
     } catch (err) {
       formError.textContent = err.message;
@@ -250,7 +203,7 @@
   // --- Refresh ---
   refreshBtn.addEventListener('click', loadJobs);
 
-  // Auto-refresh every 5s when there are active jobs
+  // Auto-refresh every 5s
   function startPolling() {
     if (pollInterval) return;
     pollInterval = setInterval(loadJobs, 5000);
@@ -258,8 +211,8 @@
 
   // --- Helpers ---
   function extractName(url) {
-    const m = url.match(/\/(playlist|album|track)\/([a-zA-Z0-9]+)/);
-    return m ? `${m[1]}/${m[2]}` : url;
+    const m = url.match(/\/(playlist)\/([a-zA-Z0-9]+)/);
+    return m ? `playlist/${m[2]}` : url;
   }
 
   function formatTime(iso) {
@@ -286,7 +239,6 @@
   }
 
   // --- Init ---
-  checkSpotifyStatus();
   loadJobs();
   startPolling();
 })();
