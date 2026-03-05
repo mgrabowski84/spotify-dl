@@ -157,7 +157,7 @@ async function runJob(job) {
     // 3. Write tracklist file
     if (!fs.existsSync(TRACKLISTS_DIR)) fs.mkdirSync(TRACKLISTS_DIR, { recursive: true });
     tracklistPath = path.join(TRACKLISTS_DIR, `${jobId}.txt`);
-    fs.writeFileSync(tracklistPath, tracks.map(t => '"' + t.replace(/"/g, '\\"') + '"').join('\n') + '\n', 'utf-8');
+    fs.writeFileSync(tracklistPath, tracks.map(t => '"' + t.replace(/"/g, '') + '"').join('\n') + '\n', 'utf-8');
     appendLog(jobId, `[spotify-dl] Tracklist written: ${tracklistPath}`);
 
     // 4. Run sldl
@@ -174,6 +174,7 @@ async function runJob(job) {
       '--concurrent-downloads', '2',
       '--skip-check-pref-cond',
       '--listen-port', LISTEN_PORT,
+      '--skip-music-dir', outputDir,
     ];
 
     appendLog(jobId, `[spotify-dl] $ sldl ${args.map(a => (a && a.includes(' ')) ? `"${a}"` : (a ?? '<undef>')).join(' ')}`);
