@@ -147,11 +147,11 @@
     const span = document.createElement('span');
     span.textContent = line + '\n';
 
-    if (line.startsWith('Succeeded:')) {
+    if (line.startsWith('Succeeded:') || line.startsWith('Skipped:')) {
       span.className = 'log-line-success';
-    } else if (line.startsWith('Failed:') || line.startsWith('Not Found:') || line.includes('[stderr]')) {
+    } else if (line.startsWith('Failed:') || line.startsWith('Not Found:')) {
       span.className = 'log-line-error';
-    } else if (line.startsWith('Searching:')) {
+    } else if (line.startsWith('[tidal]')) {
       span.className = 'log-line-search';
     } else if (line.startsWith('[spotify-dl]')) {
       span.className = 'log-line-system';
