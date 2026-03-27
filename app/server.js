@@ -30,8 +30,8 @@ app.post('/api/download', (req, res) => {
     return res.status(400).json({ error: 'url is required' });
   }
   const trimmed = url.trim();
-  if (!trimmed.match(/^https?:\/\/(open\.)?spotify\.com\/playlist\//)) {
-    return res.status(400).json({ error: 'Invalid URL. Please provide a Spotify playlist URL (open.spotify.com/playlist/...)' });
+  if (!trimmed.match(/^https?:\/\/(open\.)?spotify\.com\/(playlist|album)\//)) {
+    return res.status(400).json({ error: 'Invalid URL. Please provide a Spotify playlist or album URL (open.spotify.com/playlist/... or /album/...)' });
   }
   const job = queue.enqueue(trimmed, name || null);
   res.status(201).json(job);

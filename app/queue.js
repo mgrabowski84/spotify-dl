@@ -187,9 +187,52 @@ async function fetchPlaylistTracks(playlistId, token) {
   return { playlistName, tracks };
 }
 
-function extractPlaylistId(url) {
-  const m = url.match(/playlist\/([a-zA-Z0-9]+)/);
-  return m ? m[1] : null;
+async function fetchAlbumTracks(albumId, token) {
+  const tracks = [];
+
+  // Fetch album metadata
+  const albumRes = await fetch(`https://api.spotify.com/v1/albums/${albumId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!albumRes.ok) {
+    const err = await albumRes.json().catch(() => ({}));
+    throw new Error(`Spotify API error ${albumRes.status}: ${err.error?.message || albumRes.statusText}`);
+  }
+  const album = await albumRes.json();
+  const albumName = album.name;
+  const albumArtist = album.artists?.[0]?.name || 'Unknown';
+
+  // Fetch album tracks (paginated)
+  let url = `https://api.spotify.com/v1/albums/${albumId}/tracks?limit=50`;
+  while (url) {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Spotify API error ${res.status}: ${err.error?.message || res.statusText}`);
+    }
+    const data = await res.json();
+
+    for (const item of data.items || []) {
+      const artist = item.artists?.[0]?.name || albumArtist;
+      const title = item.name || 'Unknown';
+      const duration = item.duration_ms ? Math.round(item.duration_ms / 1000) : null;
+      tracks.push({ artist, title, duration });
+    }
+
+    url = data.next || null;
+  }
+
+  return { playlistName: `${albumArtist} - ${albumName}`, tracks };
+}
+
+function parseSpotifyUrl(url) {
+  const albumMatch = url.match(/album\/([a-zA-Z0-9]+)/);
+  if (albumMatch) return { type: 'album', id: albumMatch[1] };
+  const playlistMatch = url.match(/playlist\/([a-zA-Z0-9]+)/);
+  if (playlistMatch) return { type: 'playlist', id: playlistMatch[1] };
+  return null;
 }
 
 // --- Tidal search & download ---
@@ -429,12 +472,14 @@ async function runJob(job) {
     appendLog(jobId, '[spotify-dl] Fetching Spotify access token...');
     const token = await getSpotifyToken();
 
-    // 2. Fetch playlist tracks
-    const playlistId = extractPlaylistId(job.url);
-    if (!playlistId) throw new Error('Could not extract playlist ID from URL');
+    // 2. Fetch tracks (playlist or album)
+    const parsed = parseSpotifyUrl(job.url);
+    if (!parsed) throw new Error('Could not parse Spotify URL');
 
-    appendLog(jobId, `[spotify-dl] Fetching playlist tracks for ${playlistId}...`);
-    const { playlistName, tracks } = await fetchPlaylistTracks(playlistId, token);
+    appendLog(jobId, `[spotify-dl] Fetching ${parsed.type} tracks for ${parsed.id}...`);
+    const { playlistName, tracks } = parsed.type === 'album'
+      ? await fetchAlbumTracks(parsed.id, token)
+      : await fetchPlaylistTracks(parsed.id, token);
 
     if (!tracks.length) throw new Error('Playlist has no tracks');
 

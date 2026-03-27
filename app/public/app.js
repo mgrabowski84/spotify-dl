@@ -211,8 +211,8 @@
 
   // --- Helpers ---
   function extractName(url) {
-    const m = url.match(/\/(playlist)\/([a-zA-Z0-9]+)/);
-    return m ? `playlist/${m[2]}` : url;
+    const m = url.match(/\/(playlist|album)\/([a-zA-Z0-9]+)/);
+    return m ? `${m[1]}/${m[2]}` : url;
   }
 
   function formatTime(iso) {
