@@ -32,14 +32,19 @@ function migrate() {
       error TEXT
     );
   `);
+  // Add include_groups column if missing (migration)
+  const cols = d.prepare("PRAGMA table_info(jobs)").all().map(c => c.name);
+  if (!cols.includes('include_groups')) {
+    d.exec("ALTER TABLE jobs ADD COLUMN include_groups TEXT");
+  }
 }
 
-function createJob(url, playlistName) {
+function createJob(url, playlistName, includeGroups) {
   const d = getDb();
   const stmt = d.prepare(
-    'INSERT INTO jobs (url, playlist_name, status) VALUES (?, ?, ?)'
+    'INSERT INTO jobs (url, playlist_name, status, include_groups) VALUES (?, ?, ?, ?)'
   );
-  const result = stmt.run(url, playlistName || null, 'queued');
+  const result = stmt.run(url, playlistName || null, 'queued', includeGroups || null);
   return getJob(result.lastInsertRowid);
 }
 

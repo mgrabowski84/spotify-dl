@@ -4,6 +4,7 @@
   const nameInput = document.getElementById('name-input');
   const submitBtn = document.getElementById('submit-btn');
   const formError = document.getElementById('form-error');
+  const artistOptions = document.getElementById('artist-options');
   const jobsList = document.getElementById('jobs-list');
   const emptyState = document.getElementById('empty-state');
   const refreshBtn = document.getElementById('refresh-btn');
@@ -15,6 +16,12 @@
   let currentLogJobId = null;
   let eventSource = null;
   let pollInterval = null;
+
+  // Show/hide artist options based on URL
+  urlInput.addEventListener('input', () => {
+    const isArtist = /spotify\.com\/artist\//.test(urlInput.value);
+    artistOptions.classList.toggle('hidden', !isArtist);
+  });
 
   // --- API ---
   async function api(method, path, body) {
@@ -185,11 +192,16 @@
 
     const url = urlInput.value.trim();
     const name = nameInput.value.trim() || undefined;
+    const isArtist = /spotify\.com\/artist\//.test(url);
+    const includeGroups = isArtist
+      ? Array.from(form.querySelectorAll('input[name="include"]:checked')).map(cb => cb.value)
+      : undefined;
 
     try {
-      const job = await api('POST', '/download', { url, name });
+      const job = await api('POST', '/download', { url, name, includeGroups });
       urlInput.value = '';
       nameInput.value = '';
+      artistOptions.classList.add('hidden');
       loadJobs();
       openLogs(job.id, job.playlist_name || extractName(url));
     } catch (err) {
@@ -211,7 +223,7 @@
 
   // --- Helpers ---
   function extractName(url) {
-    const m = url.match(/\/(playlist|album)\/([a-zA-Z0-9]+)/);
+    const m = url.match(/\/(playlist|album|artist)\/([a-zA-Z0-9]+)/);
     return m ? `${m[1]}/${m[2]}` : url;
   }
 

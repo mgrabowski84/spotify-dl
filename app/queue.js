@@ -227,7 +227,52 @@ async function fetchAlbumTracks(albumId, token) {
   return { playlistName: `${albumArtist} - ${albumName}`, tracks };
 }
 
+async function fetchArtistAlbums(artistId, token, includeGroups) {
+  // Fetch artist name
+  const artistRes = await fetch(`https://api.spotify.com/v1/artists/${artistId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!artistRes.ok) {
+    const err = await artistRes.json().catch(() => ({}));
+    throw new Error(`Spotify API error ${artistRes.status}: ${err.error?.message || artistRes.statusText}`);
+  }
+  const artist = await artistRes.json();
+  const artistName = artist.name;
+
+  // Fetch albums (paginated)
+  const groups = includeGroups || 'album,single';
+  const albums = [];
+  let url = `https://api.spotify.com/v1/artists/${artistId}/albums?include_groups=${groups}&limit=50`;
+
+  while (url) {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Spotify API error ${res.status}: ${err.error?.message || res.statusText}`);
+    }
+    const data = await res.json();
+
+    for (const item of data.items || []) {
+      albums.push({
+        id: item.id,
+        name: item.name,
+        albumType: item.album_type,
+        totalTracks: item.total_tracks,
+        releaseDate: item.release_date,
+      });
+    }
+
+    url = data.next || null;
+  }
+
+  return { artistName, albums };
+}
+
 function parseSpotifyUrl(url) {
+  const artistMatch = url.match(/artist\/([a-zA-Z0-9]+)/);
+  if (artistMatch) return { type: 'artist', id: artistMatch[1] };
   const albumMatch = url.match(/album\/([a-zA-Z0-9]+)/);
   if (albumMatch) return { type: 'album', id: albumMatch[1] };
   const playlistMatch = url.match(/playlist\/([a-zA-Z0-9]+)/);
@@ -450,6 +495,38 @@ function createSemaphore(limit) {
   };
 }
 
+// --- Download a batch of tracks (shared by all job types) ---
+
+async function downloadTracks(tracks, outputDir, jobId, trackOffset) {
+  const sem = createSemaphore(TIDAL_CONCURRENT);
+  let succeeded = 0;
+  let failed = 0;
+  let skipped = 0;
+  const offset = trackOffset || 0;
+
+  const downloadPromises = tracks.map((track, index) => {
+    return (async () => {
+      if (cancelled) return;
+      await sem.acquire();
+      if (cancelled) { sem.release(); return; }
+      try {
+        const result = await downloadTrackFromTidal(track, offset + index, offset + tracks.length, outputDir, jobId);
+        if (result === 'downloaded' || result === 'skipped') succeeded++;
+        else failed++;
+        if (result === 'skipped') skipped++;
+      } catch (err) {
+        failed++;
+        appendLog(jobId, `Failed: [${offset + index + 1}/${offset + tracks.length}] ${track.artist} - ${track.title} (${err.message})`);
+      } finally {
+        sem.release();
+      }
+    })();
+  });
+
+  await Promise.all(downloadPromises);
+  return { succeeded, failed, skipped };
+}
+
 // --- Job runner ---
 
 async function runJob(job) {
@@ -472,69 +549,97 @@ async function runJob(job) {
     appendLog(jobId, '[spotify-dl] Fetching Spotify access token...');
     const token = await getSpotifyToken();
 
-    // 2. Fetch tracks (playlist or album)
+    // 2. Parse URL
     const parsed = parseSpotifyUrl(job.url);
     if (!parsed) throw new Error('Could not parse Spotify URL');
 
-    appendLog(jobId, `[spotify-dl] Fetching ${parsed.type} tracks for ${parsed.id}...`);
-    const { playlistName, tracks } = parsed.type === 'album'
-      ? await fetchAlbumTracks(parsed.id, token)
-      : await fetchPlaylistTracks(parsed.id, token);
+    let totalSucceeded = 0;
+    let totalFailed = 0;
+    let totalSkipped = 0;
 
-    if (!tracks.length) throw new Error('Playlist has no tracks');
+    if (parsed.type === 'artist') {
+      // --- Artist: download all albums ---
+      const includeGroups = job.include_groups || 'album,single';
+      appendLog(jobId, `[spotify-dl] Fetching artist discography for ${parsed.id} (${includeGroups})...`);
 
-    const resolvedName = job.playlist_name || playlistName || `spotify_${playlistId}`;
-    const folderName = sanitizeFolderName(resolvedName);
-    const outputDir = path.join(AUDIO_DIR, folderName);
+      const { artistName, albums } = await fetchArtistAlbums(parsed.id, token, includeGroups);
+      if (!albums.length) throw new Error('Artist has no albums');
 
-    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+      const topFolder = sanitizeFolderName(job.playlist_name || artistName);
+      const topDir = path.join(AUDIO_DIR, topFolder);
+      if (!fs.existsSync(topDir)) fs.mkdirSync(topDir, { recursive: true });
 
-    db.updateJob(jobId, { playlist_name: resolvedName, track_count: tracks.length });
-    appendLog(jobId, `[spotify-dl] Playlist: "${resolvedName}" -- ${tracks.length} tracks`);
-    appendLog(jobId, `[spotify-dl] Output: ${outputDir}`);
-    appendLog(jobId, `[tidal] Downloading with ${TIDAL_CONCURRENT} concurrent connections...`);
+      // Count total tracks across all albums
+      const totalTracks = albums.reduce((sum, a) => sum + a.totalTracks, 0);
+      const resolvedName = job.playlist_name || artistName;
+      db.updateJob(jobId, { playlist_name: resolvedName, track_count: totalTracks });
+      appendLog(jobId, `[spotify-dl] Artist: "${artistName}" -- ${albums.length} releases, ${totalTracks} tracks`);
+      appendLog(jobId, `[spotify-dl] Output: ${topDir}`);
+      appendLog(jobId, `[tidal] Downloading with ${TIDAL_CONCURRENT} concurrent connections...`);
 
-    // 3. Download all tracks from Tidal
-    const sem = createSemaphore(TIDAL_CONCURRENT);
-    let succeeded = 0;
-    let failed = 0;
-    let skipped = 0;
+      for (let i = 0; i < albums.length; i++) {
+        if (cancelled) break;
+        const album = albums[i];
 
-    const downloadPromises = tracks.map((track, index) => {
-      return (async () => {
-        if (cancelled) return;
-        await sem.acquire();
-        if (cancelled) { sem.release(); return; }
-        try {
-          const result = await downloadTrackFromTidal(track, index, tracks.length, outputDir, jobId);
-          if (result === 'downloaded' || result === 'skipped') succeeded++;
-          else failed++;
-          if (result === 'skipped') skipped++;
-        } catch (err) {
-          failed++;
-          appendLog(jobId, `Failed: [${index + 1}/${tracks.length}] ${track.artist} - ${track.title} (${err.message})`);
-        } finally {
-          sem.release();
+        appendLog(jobId, `[spotify-dl] Album ${i + 1}/${albums.length}: "${album.name}" (${album.albumType}, ${album.totalTracks} tracks, ${album.releaseDate})`);
+
+        const { tracks } = await fetchAlbumTracks(album.id, token);
+        if (!tracks.length) {
+          appendLog(jobId, `[spotify-dl] Skipping "${album.name}" -- no tracks`);
+          continue;
         }
-      })();
-    });
 
-    await Promise.all(downloadPromises);
+        const albumFolder = sanitizeFolderName(album.name);
+        const albumDir = path.join(topDir, albumFolder);
+        if (!fs.existsSync(albumDir)) fs.mkdirSync(albumDir, { recursive: true });
 
-    if (cancelled) return; // Job was cancelled during download
+        const result = await downloadTracks(tracks, albumDir, jobId, 0);
+        totalSucceeded += result.succeeded;
+        totalFailed += result.failed;
+        totalSkipped += result.skipped;
 
-    const status = failed === 0 ? 'completed' : (succeeded > 0 ? 'completed' : 'failed');
+        appendLog(jobId, `[spotify-dl] Album "${album.name}": ${result.succeeded} succeeded${result.skipped ? ` (${result.skipped} skipped)` : ''}, ${result.failed} failed`);
+      }
+
+    } else {
+      // --- Playlist or Album: single folder ---
+      appendLog(jobId, `[spotify-dl] Fetching ${parsed.type} tracks for ${parsed.id}...`);
+      const { playlistName, tracks } = parsed.type === 'album'
+        ? await fetchAlbumTracks(parsed.id, token)
+        : await fetchPlaylistTracks(parsed.id, token);
+
+      if (!tracks.length) throw new Error('No tracks found');
+
+      const resolvedName = job.playlist_name || playlistName || `spotify_${parsed.id}`;
+      const folderName = sanitizeFolderName(resolvedName);
+      const outputDir = path.join(AUDIO_DIR, folderName);
+      if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+
+      db.updateJob(jobId, { playlist_name: resolvedName, track_count: tracks.length });
+      appendLog(jobId, `[spotify-dl] ${parsed.type === 'album' ? 'Album' : 'Playlist'}: "${resolvedName}" -- ${tracks.length} tracks`);
+      appendLog(jobId, `[spotify-dl] Output: ${outputDir}`);
+      appendLog(jobId, `[tidal] Downloading with ${TIDAL_CONCURRENT} concurrent connections...`);
+
+      const result = await downloadTracks(tracks, outputDir, jobId, 0);
+      totalSucceeded = result.succeeded;
+      totalFailed = result.failed;
+      totalSkipped = result.skipped;
+    }
+
+    if (cancelled) return;
+
+    const status = totalFailed === 0 ? 'completed' : (totalSucceeded > 0 ? 'completed' : 'failed');
 
     appendLog(jobId, `[spotify-dl] Finished: ${status}`);
-    appendLog(jobId, `[spotify-dl] ${succeeded} succeeded${skipped ? ` (${skipped} skipped)` : ''}, ${failed} not found/failed`);
+    appendLog(jobId, `[spotify-dl] ${totalSucceeded} succeeded${totalSkipped ? ` (${totalSkipped} skipped)` : ''}, ${totalFailed} not found/failed`);
 
     db.updateJob(jobId, {
       status,
-      downloaded: succeeded,
-      failed,
+      downloaded: totalSucceeded,
+      failed: totalFailed,
       finished_at: new Date().toISOString(),
     });
-    broadcast(jobId, 'done', { status, downloaded: succeeded, failed });
+    broadcast(jobId, 'done', { status, downloaded: totalSucceeded, failed: totalFailed });
 
   } catch (err) {
     appendLog(jobId, `[spotify-dl] Error: ${err.message}`);
@@ -557,8 +662,8 @@ function processQueue() {
   if (next) runJob(next);
 }
 
-function enqueue(url, playlistName) {
-  const job = db.createJob(url, playlistName);
+function enqueue(url, playlistName, includeGroups) {
+  const job = db.createJob(url, playlistName, includeGroups);
   appendLog(job.id, `[spotify-dl] Job #${job.id} queued: ${url}`);
   processQueue();
   return job;

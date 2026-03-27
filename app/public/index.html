@@ -19,7 +19,7 @@
           <input
             type="text"
             id="url-input"
-            placeholder="Paste Spotify playlist or album URL..."
+            placeholder="Paste Spotify playlist, album, or artist URL..."
             autocomplete="off"
             spellcheck="false"
             required
@@ -34,6 +34,12 @@
             autocomplete="off"
             spellcheck="false"
           >
+        </div>
+        <div id="artist-options" class="artist-options hidden">
+          <span class="options-label">Include:</span>
+          <label><input type="checkbox" name="include" value="album" checked> Albums</label>
+          <label><input type="checkbox" name="include" value="single" checked> Singles &amp; EPs</label>
+          <label><input type="checkbox" name="include" value="compilation"> Compilations</label>
         </div>
       </form>
       <div id="form-error" class="error hidden"></div>

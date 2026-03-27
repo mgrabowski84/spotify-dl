@@ -25,15 +25,22 @@ app.use(express.static(path.join(__dirname, 'public')));
 // --- Download API ---
 
 app.post('/api/download', (req, res) => {
-  const { url, name } = req.body;
+  const { url, name, includeGroups } = req.body;
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ error: 'url is required' });
   }
   const trimmed = url.trim();
-  if (!trimmed.match(/^https?:\/\/(open\.)?spotify\.com\/(playlist|album)\//)) {
-    return res.status(400).json({ error: 'Invalid URL. Please provide a Spotify playlist or album URL (open.spotify.com/playlist/... or /album/...)' });
+  if (!trimmed.match(/^https?:\/\/(open\.)?spotify\.com\/(playlist|album|artist)\//)) {
+    return res.status(400).json({ error: 'Invalid URL. Provide a Spotify playlist, album, or artist URL.' });
   }
-  const job = queue.enqueue(trimmed, name || null);
+  // Validate includeGroups if provided
+  const validGroups = ['album', 'single', 'compilation'];
+  let groups = null;
+  if (Array.isArray(includeGroups) && includeGroups.length > 0) {
+    const filtered = includeGroups.filter(g => validGroups.includes(g));
+    if (filtered.length > 0) groups = filtered.join(',');
+  }
+  const job = queue.enqueue(trimmed, name || null, groups);
   res.status(201).json(job);
 });
 
