@@ -178,7 +178,7 @@ async function fetchPlaylistTracks(playlistId, token) {
       const artist = item.track.artists?.[0]?.name || 'Unknown';
       const title = item.track.name || 'Unknown';
       const duration = item.track.duration_ms ? Math.round(item.track.duration_ms / 1000) : null;
-      tracks.push({ artist, title, duration });
+      tracks.push({ artist, title, duration, trackNumber: tracks.length + 1 });
     }
 
     url = tracksPage.next || null;
@@ -218,7 +218,8 @@ async function fetchAlbumTracks(albumId, token) {
       const artist = item.artists?.[0]?.name || albumArtist;
       const title = item.name || 'Unknown';
       const duration = item.duration_ms ? Math.round(item.duration_ms / 1000) : null;
-      tracks.push({ artist, title, duration });
+      const trackNumber = item.track_number || (tracks.length + 1);
+      tracks.push({ artist, title, duration, trackNumber });
     }
 
     url = data.next || null;
@@ -391,7 +392,7 @@ async function downloadFile(streamUrl, outputPath) {
 }
 
 async function downloadTrackFromTidal(track, index, total, outputDir, jobId) {
-  const { artist, title, duration } = track;
+  const { artist, title, duration, trackNumber } = track;
   const tag = `[${index + 1}/${total}]`;
 
   appendLog(jobId, `[tidal] ${tag} Searching: ${artist} - ${title}`);
@@ -441,7 +442,8 @@ async function downloadTrackFromTidal(track, index, total, outputDir, jobId) {
       }
 
       // 4. Build output filename and check if exists
-      const filename = sanitizeFilename(`${artist} - ${title}`) + '.flac';
+      const trackNum = String(trackNumber).padStart(2, '0');
+      const filename = sanitizeFilename(`${trackNum} - ${artist} - ${title}`) + '.flac';
       const outputPath = path.join(outputDir, filename);
 
       if (fs.existsSync(outputPath)) {
