@@ -13,6 +13,9 @@ process.umask(0o002);
 const AUDIO_DIR = process.env.AUDIO_DIR || '/music';
 const TIDAL_API_URL = process.env.TIDAL_API_URL || '';
 const TIDAL_CONCURRENT = parseInt(process.env.TIDAL_CONCURRENT) || 3;
+const NAVIDROME_URL = process.env.NAVIDROME_URL || '';
+const NAVIDROME_USER = process.env.NAVIDROME_USER || '';
+const NAVIDROME_PASSWORD = process.env.NAVIDROME_PASSWORD || '';
 const UPTIME_URL = 'https://tidal-uptime.jiffy-puffs-1j.workers.dev/';
 const FALLBACK_INSTANCES = [
   'https://eu-central.monochrome.tf',
@@ -410,6 +413,33 @@ async function downloadFile(streamUrl, outputPath) {
   }
 }
 
+// --- Navidrome library rescan ---
+
+async function triggerNavidromeScan(jobId) {
+  if (!NAVIDROME_URL || !NAVIDROME_USER || !NAVIDROME_PASSWORD) return;
+  try {
+    const params = new URLSearchParams({
+      u: NAVIDROME_USER,
+      p: NAVIDROME_PASSWORD,
+      v: '1.16.1',
+      c: 'spotify-dl',
+      f: 'json',
+    });
+    const url = `${NAVIDROME_URL}/rest/startScan?${params}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const status = data?.['subsonic-response']?.status;
+    if (status === 'ok') {
+      appendLog(jobId, '[navidrome] Library rescan triggered');
+    } else {
+      appendLog(jobId, `[navidrome] Unexpected response: ${JSON.stringify(data)}`);
+    }
+  } catch (err) {
+    appendLog(jobId, `[navidrome] Warning: failed to trigger rescan: ${err.message}`);
+  }
+}
+
 // --- FLAC metadata tagging via metaflac CLI ---
 
 async function tagFlacFile(filePath, metadata, jobId) {
@@ -714,6 +744,9 @@ async function runJob(job) {
       finished_at: new Date().toISOString(),
     });
     broadcast(jobId, 'done', { status, downloaded: totalSucceeded, failed: totalFailed });
+
+    // Trigger Navidrome rescan so new tracks appear immediately
+    if (totalSucceeded > 0) await triggerNavidromeScan(jobId);
 
   } catch (err) {
     appendLog(jobId, `[spotify-dl] Error: ${err.message}`);
