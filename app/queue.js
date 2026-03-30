@@ -7,6 +7,9 @@ const db = require('./db');
 
 const execFileAsync = promisify(execFile);
 
+// Set umask so new files are 664 and directories are 775 (group-writable)
+process.umask(0o002);
+
 const AUDIO_DIR = process.env.AUDIO_DIR || '/music';
 const TIDAL_API_URL = process.env.TIDAL_API_URL || '';
 const TIDAL_CONCURRENT = parseInt(process.env.TIDAL_CONCURRENT) || 3;
