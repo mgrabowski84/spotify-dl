@@ -1,7 +1,11 @@
 const path = require('path');
 const fs = require('fs');
 const { pipeline } = require('stream/promises');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const db = require('./db');
+
+const execFileAsync = promisify(execFile);
 
 const AUDIO_DIR = process.env.AUDIO_DIR || '/music';
 const TIDAL_API_URL = process.env.TIDAL_API_URL || '';
@@ -158,7 +162,8 @@ async function getSpotifyToken() {
 async function fetchPlaylistTracks(playlistId, token) {
   const tracks = [];
   let playlistName = null;
-  let url = `https://api.spotify.com/v1/playlists/${playlistId}?fields=name,tracks(total,next,items(track(name,duration_ms,artists(name))))`;
+  let coverUrl = null;
+  let url = `https://api.spotify.com/v1/playlists/${playlistId}?fields=name,images,tracks(total,next,items(track(name,duration_ms,artists(name))))`;
 
   while (url) {
     const res = await fetch(url, {
@@ -171,6 +176,7 @@ async function fetchPlaylistTracks(playlistId, token) {
     const data = await res.json();
 
     if (data.name) playlistName = data.name;
+    if (data.images && !coverUrl) coverUrl = data.images[0]?.url || null;
     const tracksPage = data.tracks || data;
 
     for (const item of tracksPage.items || []) {
@@ -184,7 +190,16 @@ async function fetchPlaylistTracks(playlistId, token) {
     url = tracksPage.next || null;
   }
 
-  return { playlistName, tracks };
+  // For playlists: album metadata = playlist itself
+  const albumName = playlistName || 'Unknown Playlist';
+  const albumArtist = playlistName || 'Unknown Playlist';
+  for (const track of tracks) {
+    track.albumName = albumName;
+    track.albumArtist = albumArtist;
+    track.coverUrl = coverUrl;
+  }
+
+  return { playlistName, albumArtist, coverUrl, tracks };
 }
 
 async function fetchAlbumTracks(albumId, token) {
@@ -201,6 +216,7 @@ async function fetchAlbumTracks(albumId, token) {
   const album = await albumRes.json();
   const albumName = album.name;
   const albumArtist = album.artists?.[0]?.name || 'Unknown';
+  const coverUrl = album.images?.[0]?.url || null;
 
   // Fetch album tracks (paginated)
   let url = `https://api.spotify.com/v1/albums/${albumId}/tracks?limit=50`;
@@ -219,13 +235,13 @@ async function fetchAlbumTracks(albumId, token) {
       const title = item.name || 'Unknown';
       const duration = item.duration_ms ? Math.round(item.duration_ms / 1000) : null;
       const trackNumber = item.track_number || (tracks.length + 1);
-      tracks.push({ artist, title, duration, trackNumber });
+      tracks.push({ artist, title, duration, trackNumber, albumName, albumArtist, coverUrl });
     }
 
     url = data.next || null;
   }
 
-  return { playlistName: `${albumArtist} - ${albumName}`, tracks };
+  return { playlistName: albumName, albumArtist, coverUrl, tracks };
 }
 
 async function fetchArtistAlbums(artistId, token, includeGroups) {
@@ -391,11 +407,54 @@ async function downloadFile(streamUrl, outputPath) {
   }
 }
 
-async function downloadTrackFromTidal(track, index, total, outputDir, jobId) {
-  const { artist, title, duration, trackNumber } = track;
+// --- FLAC metadata tagging via metaflac CLI ---
+
+async function tagFlacFile(filePath, metadata, jobId) {
+  const { artist, title, albumName, albumArtist, trackNumber, coverUrl } = metadata;
+  const trackNum = String(trackNumber).padStart(2, '0');
+
+  try {
+    // Set Vorbis comment tags
+    const args = [
+      '--remove-all-tags',
+      `--set-tag=ARTIST=${artist}`,
+      `--set-tag=TITLE=${title}`,
+      `--set-tag=ALBUM=${albumName}`,
+      `--set-tag=ALBUMARTIST=${albumArtist}`,
+      `--set-tag=TRACKNUMBER=${trackNum}`,
+      filePath,
+    ];
+    await execFileAsync('metaflac', args);
+
+    // Embed cover art if available
+    if (coverUrl) {
+      const tmpCover = filePath + '.cover.jpg';
+      try {
+        await downloadFile(coverUrl, tmpCover);
+        await execFileAsync('metaflac', [
+          `--import-picture-from=3||||${tmpCover}`,
+          filePath,
+        ]);
+      } finally {
+        try { fs.unlinkSync(tmpCover); } catch {}
+      }
+    }
+  } catch (err) {
+    appendLog(jobId, `[tag] Warning: failed to tag ${path.basename(filePath)}: ${err.message}`);
+  }
+}
+
+async function downloadTrackFromTidal(track, index, total, baseDir, jobId, useSubDirs) {
+  const { artist, title, duration, trackNumber, albumName, albumArtist, coverUrl } = track;
   const tag = `[${index + 1}/${total}]`;
 
   appendLog(jobId, `[tidal] ${tag} Searching: ${artist} - ${title}`);
+
+  // Build output directory: albumArtist/albumName subdirs (albums/artists) or flat (playlists)
+  const outputDir = useSubDirs && albumArtist && albumName
+    ? path.join(baseDir, sanitizeFolderName(albumArtist), sanitizeFolderName(albumName))
+    : baseDir;
+  if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
   // Try multiple instances with failover
   const triedInstances = new Set();
@@ -455,6 +514,9 @@ async function downloadTrackFromTidal(track, index, total, outputDir, jobId) {
       appendLog(jobId, `[tidal] ${tag} Downloading: ${bestResult.artist?.name} - ${bestResult.title} [${stream.quality}] (score: ${bestScore})`);
       await downloadFile(stream.url, outputPath);
 
+      // 6. Tag FLAC with metadata + cover art
+      await tagFlacFile(outputPath, { artist, title, albumName, albumArtist, trackNumber, coverUrl }, jobId);
+
       const sizeMb = (fs.statSync(outputPath).size / 1024 / 1024).toFixed(1);
       appendLog(jobId, `Succeeded: ${tag} ${artist} - ${title} (${sizeMb} MB)`);
       return 'downloaded';
@@ -499,7 +561,7 @@ function createSemaphore(limit) {
 
 // --- Download a batch of tracks (shared by all job types) ---
 
-async function downloadTracks(tracks, outputDir, jobId, trackOffset) {
+async function downloadTracks(tracks, baseDir, jobId, trackOffset, useSubDirs) {
   const sem = createSemaphore(TIDAL_CONCURRENT);
   let succeeded = 0;
   let failed = 0;
@@ -512,7 +574,7 @@ async function downloadTracks(tracks, outputDir, jobId, trackOffset) {
       await sem.acquire();
       if (cancelled) { sem.release(); return; }
       try {
-        const result = await downloadTrackFromTidal(track, offset + index, offset + tracks.length, outputDir, jobId);
+        const result = await downloadTrackFromTidal(track, offset + index, offset + tracks.length, baseDir, jobId, useSubDirs);
         if (result === 'downloaded' || result === 'skipped') succeeded++;
         else failed++;
         if (result === 'skipped') skipped++;
@@ -561,22 +623,18 @@ async function runJob(job) {
 
     if (parsed.type === 'artist') {
       // --- Artist: download all albums ---
+      // Each album's tracks carry albumArtist/albumName, dirs built automatically as AUDIO_DIR/{albumArtist}/{albumName}/
       const includeGroups = job.include_groups || 'album,single';
       appendLog(jobId, `[spotify-dl] Fetching artist discography for ${parsed.id} (${includeGroups})...`);
 
       const { artistName, albums } = await fetchArtistAlbums(parsed.id, token, includeGroups);
       if (!albums.length) throw new Error('Artist has no albums');
 
-      const topFolder = sanitizeFolderName(job.playlist_name || artistName);
-      const topDir = path.join(AUDIO_DIR, topFolder);
-      if (!fs.existsSync(topDir)) fs.mkdirSync(topDir, { recursive: true });
-
-      // Count total tracks across all albums
       const totalTracks = albums.reduce((sum, a) => sum + a.totalTracks, 0);
       const resolvedName = job.playlist_name || artistName;
       db.updateJob(jobId, { playlist_name: resolvedName, track_count: totalTracks });
       appendLog(jobId, `[spotify-dl] Artist: "${artistName}" -- ${albums.length} releases, ${totalTracks} tracks`);
-      appendLog(jobId, `[spotify-dl] Output: ${topDir}`);
+      appendLog(jobId, `[spotify-dl] Output: ${AUDIO_DIR}/{albumArtist}/{albumName}/`);
       appendLog(jobId, `[tidal] Downloading with ${TIDAL_CONCURRENT} concurrent connections...`);
 
       for (let i = 0; i < albums.length; i++) {
@@ -591,11 +649,7 @@ async function runJob(job) {
           continue;
         }
 
-        const albumFolder = sanitizeFolderName(album.name);
-        const albumDir = path.join(topDir, albumFolder);
-        if (!fs.existsSync(albumDir)) fs.mkdirSync(albumDir, { recursive: true });
-
-        const result = await downloadTracks(tracks, albumDir, jobId, 0);
+        const result = await downloadTracks(tracks, AUDIO_DIR, jobId, 0, true);
         totalSucceeded += result.succeeded;
         totalFailed += result.failed;
         totalSkipped += result.skipped;
@@ -603,26 +657,41 @@ async function runJob(job) {
         appendLog(jobId, `[spotify-dl] Album "${album.name}": ${result.succeeded} succeeded${result.skipped ? ` (${result.skipped} skipped)` : ''}, ${result.failed} failed`);
       }
 
-    } else {
-      // --- Playlist or Album: single folder ---
-      appendLog(jobId, `[spotify-dl] Fetching ${parsed.type} tracks for ${parsed.id}...`);
-      const { playlistName, tracks } = parsed.type === 'album'
-        ? await fetchAlbumTracks(parsed.id, token)
-        : await fetchPlaylistTracks(parsed.id, token);
+    } else if (parsed.type === 'album') {
+      // --- Album: dirs built as AUDIO_DIR/{albumArtist}/{albumName}/ ---
+      appendLog(jobId, `[spotify-dl] Fetching album tracks for ${parsed.id}...`);
+      const { playlistName, albumArtist, tracks } = await fetchAlbumTracks(parsed.id, token);
 
       if (!tracks.length) throw new Error('No tracks found');
 
       const resolvedName = job.playlist_name || playlistName || `spotify_${parsed.id}`;
-      const folderName = sanitizeFolderName(resolvedName);
-      const outputDir = path.join(AUDIO_DIR, folderName);
+      db.updateJob(jobId, { playlist_name: resolvedName, track_count: tracks.length });
+      appendLog(jobId, `[spotify-dl] Album: "${resolvedName}" by ${albumArtist} -- ${tracks.length} tracks`);
+      appendLog(jobId, `[spotify-dl] Output: ${AUDIO_DIR}/${sanitizeFolderName(albumArtist)}/${sanitizeFolderName(resolvedName)}/`);
+      appendLog(jobId, `[tidal] Downloading with ${TIDAL_CONCURRENT} concurrent connections...`);
+
+      const result = await downloadTracks(tracks, AUDIO_DIR, jobId, 0, true);
+      totalSucceeded = result.succeeded;
+      totalFailed = result.failed;
+      totalSkipped = result.skipped;
+
+    } else {
+      // --- Playlist: single folder at AUDIO_DIR/{playlistName}/ ---
+      appendLog(jobId, `[spotify-dl] Fetching playlist tracks for ${parsed.id}...`);
+      const { playlistName, tracks } = await fetchPlaylistTracks(parsed.id, token);
+
+      if (!tracks.length) throw new Error('No tracks found');
+
+      const resolvedName = job.playlist_name || playlistName || `spotify_${parsed.id}`;
+      const outputDir = path.join(AUDIO_DIR, sanitizeFolderName(resolvedName));
       if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
       db.updateJob(jobId, { playlist_name: resolvedName, track_count: tracks.length });
-      appendLog(jobId, `[spotify-dl] ${parsed.type === 'album' ? 'Album' : 'Playlist'}: "${resolvedName}" -- ${tracks.length} tracks`);
+      appendLog(jobId, `[spotify-dl] Playlist: "${resolvedName}" -- ${tracks.length} tracks`);
       appendLog(jobId, `[spotify-dl] Output: ${outputDir}`);
       appendLog(jobId, `[tidal] Downloading with ${TIDAL_CONCURRENT} concurrent connections...`);
 
-      const result = await downloadTracks(tracks, outputDir, jobId, 0);
+      const result = await downloadTracks(tracks, outputDir, jobId, 0, false);
       totalSucceeded = result.succeeded;
       totalFailed = result.failed;
       totalSkipped = result.skipped;
